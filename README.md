@@ -41,6 +41,15 @@
 
 - 引导节点使用bootstrapNode，引导节点至少需要具有公网ipv4地址
 
+# 编译指南：
+
+```shell
+cd go-libp2p-daemon/p2pd
+(linux) go build -mod=vendor . && cp p2pd ../..
+(windows cmd) go build -mod=vendor . && copy p2pd.exe ..\.. /B/Y
+nim c -r guiNode.nim
+```
+
 # TODO:
 
 - [X] 节点域名
