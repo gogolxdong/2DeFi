@@ -4,5 +4,3 @@
 --define:release
 --gc:arc
 --deadCodeElim:on
---opt:size
-

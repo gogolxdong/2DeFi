@@ -15,7 +15,7 @@ import i18n
 import os
 import winim/[winstr, utils], winim/inc/[winuser, shellapi]
 
-import wNim/[wApp, wMacros, wStaticText, wFont, wCursor]
+import wNim/[wApp, wMacros, wStaticText, wFont, wCursor, wTypes]
 import winim
 
 when not(compileOption("threads")):
@@ -42,7 +42,7 @@ type
     hyperlinkChan: Channel[string] #创建超链接通道
     remotes: OrderedTable[string, OrderedTable[string, P2PStream]] #节点-协议-流映射
     chatOutputTable: OrderedTable[string, wTypes.wTextCtrl] #对话框输出面板
-    peerInfoTable: OrderedTable[string, tuple[info:PeerInfo, item: wTreeItem]] #节点信息表，包含基本信息和节点列表中对应的GUI元素
+    peerInfoTable: OrderedTable[string, tuple[peerInfo:PeerInfo, item: wTreeItem]] #节点信息表，包含基本信息和节点列表中对应的GUI元素
     domainPeerTable : OrderedTable[string,string] #记录域名与节点编号的对应关系
     fileTable: OrderedTable[string, FileInfo] #分享的文件信息表
 
@@ -363,7 +363,7 @@ proc frameMenu(event: wEvent) =
     if files.len != 0:
       var (path,name,ext) = splitFile(files[0])
       var label = "ipfs://" & node.globalDomain & "/" & name & ext
-      waitFor node.api.pubsubPublish(node.topDomain, label)
+      waitFor node.api.pubsubPublish(node.topDomain, cast[seq[byte]](label))
       node.fileTable[label] = FileInfo(url:files[0], like:0, status: Stopped)
   of idenUS:
     if currentLanguage != "enUS":
@@ -475,7 +475,7 @@ toolbar.addTool(idGoBack, "", Bitmap(imgGoBack), longHelp="后退")
 toolbar.addTool(idGoForward, "", Bitmap(imgGoForward), longHelp="前进")
 toolbar.disableTool(idGoBack)
 toolbar.disableTool(idGoForward)
-rebar.addControl(toolbar)
+rebar.addBand(toolbar)
 
 searchTextCtrl = TextCtrl(rebar, value="ipfs://", style = wBorderSunken)
 
@@ -484,8 +484,8 @@ searchTextCtrl.wEvent_SetFocus do (event: wEvent):
   searchTextCtrl.selectAll()
   event.skip
 
-rebar.addControl(searchTextCtrl)
-rebar.minimize(0)
+rebar.addBand(searchTextCtrl)
+rebar.minimizeBand(0)
 
 #状态栏
 let statusBar = StatusBar(frame)
@@ -645,7 +645,7 @@ peerboard.wEvent_ContextMenu do(event: wEvent):
         result = newFuture[bool]()
         result.complete true
       var ticket = waitFor node.api.pubsubSubscribe(topic,callback)
-      node.consoleString = fanyi"watched: " & $node.peerInfoTable[ticket.topic].info.domain & "\r\n"
+      node.consoleString = fanyi"watched: " & $node.peerInfoTable[ticket.topic].peerInfo.domainName & "\r\n"
       console.add node.consoleString
     of idSend:
       var files = FileDialog(frame, style=wFdOpen or wFdFileMustExist).display()
@@ -752,9 +752,6 @@ proc startDaemon() =
     bootstrapNodes = bootstrapNodes, daemon=daemon, hostAddresses=hostAddresses)
 
   var id = $(waitFor node.api.identity()).peer
-  var domainPub = fmt"/pub 域名系统 " & $ %*{config["domain"].getStr: $id}
-  echo domainPub
-  node.messageChan.send(domainPub)
   if config["id"].getStr != id:
     config["id"] = % $id
     writeFile("config.json", $config)
@@ -772,8 +769,9 @@ template getPeerId(): untyped =
 proc callback(api: DaemonAPI,ticket: PubsubTicket,message: PubSubMessage): Future[bool] = 
   {.gcsafe.}:
     result = newFuture[bool]()
-    if message.data.contains("ipfs://"):
-      var file = message.data
+    var data = cast[string](message.data)
+    if data.contains("ipfs://"):
+      var file = data
       console.add "\r\n" 
       hyperlinks[file] = nil
       if not node.fileTable.hasKey(file):
@@ -781,22 +779,22 @@ proc callback(api: DaemonAPI,ticket: PubsubTicket,message: PubSubMessage): Futur
         node.fileTable[file] = FileInfo(url:file , like:0 , status: Stopped)
       discard winim.PostMessage(frame.mHwnd, wEvent_Menu, WPARAM idCreateHyperlink, LPARAM idCreateHyperlink)
     else:
-      echo message.data
+      echo data
     result.complete true
 
-proc execute() {.thread.} =
-  {.gcsafe.}:
-    while true:
-      var file = node.fileChan.recv()
-      if file == "stop": break
-      var (path,name,ext) = file.splitFile()
-      var tempFile = tempDir / name & ext
-      if fileExists(tempFile):
-        shellapi.ShellExecute(0, "open", tempFile , nil, nil, winim.SW_SHOW)
-      hyperlinks[file].setCursor(Cursor(wCursorHand))
+# proc execute() {.thread.} =
+#   {.gcsafe.}:
+#     while true:
+#       var file = node.fileChan.recv()
+#       if file == "stop": break
+#       var (path,name,ext) = file.splitFile()
+#       var tempFile = tempDir / name & ext
+#       if fileExists(tempFile):
+#         shellapi.ShellExecute(0, "open", tempFile , nil, nil, winim.SW_SHOW)
+#       hyperlinks[file].setCursor(Cursor(wCursorHand))
 
-var shellOpen: Thread[void]
-shellOpen.createThread(execute)
+# var shellOpen: Thread[void]
+# shellOpen.createThread(execute)
 
 
 template getLatencyAndUnit(): untyped {.dirty.} =
@@ -830,7 +828,7 @@ proc status() {.async.} =
               var res = winim.SendMessage(frame.mHwnd, wEvent_Menu, WPARAM idCreateChatFrame, cast[LPARAM](&peer.cstring))
               if res != 0:
                 continue
-            var message = strformat.`&`"{node.peerInfoTable[peer].info.domain} {$now().format(timeFormat)}\r\n{line}\r\n"
+            var message = strformat.`&`"{node.peerInfoTable[peer].peerInfo.domainName} {$now().format(timeFormat)}\r\n{line}\r\n"
             node.chatOutputTable[peer].add message
               
           of SendProtocol:
@@ -902,7 +900,7 @@ proc status() {.async.} =
               node.remotes[peer][LikeProtocol] = stream
             else:
               node.remotes[peer] = {LikeProtocol: stream}.toOrderedTable
-            node.consoleString = $node.peerInfoTable[$stream.peer].info.domain & strformat.`&` "赞\r\n{line}\r\n"
+            node.consoleString = $node.peerInfoTable[$stream.peer].peerInfo.domainName & strformat.`&` "赞\r\n{line}\r\n"
             console.add node.consoleString
           else:
             break
@@ -915,33 +913,33 @@ proc status() {.async.} =
     while true:
       if node.stop: break
       var peers = await node.api.listPeers()
-      peers.insert PeerInfo(peer: PeerId.init(config["id"].getStr).get, domain: node.globalDomain)
+      peers.insert PeerInfo(peer: PeerId.init(config["id"].getStr).get, domainName: node.globalDomain)
       var id = config["id"].getStr
       for info in peers.mitems:
-        if info.domain == "": info.domain = "IPFS/" & $info.peer
+        if info.domainName == "": info.domainName = "IPFS/" & $info.peer
         if not node.peerInfoTable.hasKey $info.peer:
-          node.peerInfoTable[$info.peer] = (info:info, item: peerboard.TreeItem(0))
+          node.peerInfoTable[$info.peer] = (peerInfo:info, item: peerboard.TreeItem(0))
         else:
-          node.peerInfoTable[$info.peer].info = info
+          node.peerInfoTable[$info.peer].peerInfo = info
         
-        if info.domain != "":
-          node.domainPeerTable[info.domain] = $info.peer
+        if info.domainName != "":
+          node.domainPeerTable[info.domainName] = $info.peer
 
-        if info.domain.contains(node.peerFilter):
+        if info.domainName.contains(node.peerFilter):
           newConnectedPeers.incl $info.peer
-          var peerDomain = info.domain.split("/")
+          var peerDomain = info.domainName.split("/")
           if not peerRootTable.hasKey(peerDomain[0]):
             peerRootTable[peerDomain[0]] = peerboard.addRoot(peerDomain[0])
 
         getLatencyAndUnit()
                      
-        var peer = if info.domain != "": info.domain else: $info.peer
+        var peer = if info.domainName != "": info.domainName else: $info.peer
         var formatItem = strformat.`&`"{peer} {info.transport} {unitLatency}{unit}"
         var old = node.peerInfoTable[$info.peer].item.getText
         var oldParent = node.peerInfoTable[$info.peer].item.getParent.getText
-        if not info.domain.startsWith(oldParent):
+        if not info.domainName.startsWith(oldParent):
             delete node.peerInfoTable[$info.peer].item
-            node.peerInfoTable[$info.peer] = (info: info,item: peerboard.appendItem(peerRootTable[info.domain.split("/")[0]], formatItem & "\r\n"))
+            node.peerInfoTable[$info.peer] = (peerInfo: info,item: peerboard.appendItem(peerRootTable[info.domainName.split("/")[0]], formatItem & "\r\n"))
         if old != formatItem:
           node.peerInfoTable[$info.peer].item.setText formatItem 
       
@@ -955,12 +953,12 @@ proc status() {.async.} =
 
       var onlinePeers = newConnectedPeers - previousConnectedPeers
       for id in onlinePeers:
-        var info = node.peerInfoTable[id].info
+        var info = node.peerInfoTable[id].peerInfo
         getLatencyAndUnit()
-        var peer = if info.domain != "": info.domain else: $info.peer
+        var peer = if info.domainName != "": info.domainName else: $info.peer
         var formatItem = strformat.`&`"{peer} {info.transport} {unitLatency}{unit}"
         if node.peerInfoTable[$info.peer].item.handle == 0:
-          var domain = info.domain.split("/")[0] 
+          var domain = info.domainName.split("/")[0] 
           node.peerInfoTable[$info.peer].item = peerboard.appendItem(peerRootTable[domain], formatItem & "\r\n")
       if node.peerFilter == "":
         previousConnectedPeers = newConnectedPeers
@@ -983,7 +981,7 @@ proc remoteReader(peer: string) {.async.} =
           var res = winim.SendMessage(frame.mHwnd, wEvent_Menu, WPARAM idCreateChatFrame, cast[LPARAM](&peer.cstring))
           if res != 0:
             continue
-        var message = strformat.`&`"{node.peerInfoTable[peer].info.domain} {$now().format(timeFormat)}\r\n{line}\r\n"
+        var message = strformat.`&`"{node.peerInfoTable[peer].peerInfo.domainName} {$now().format(timeFormat)}\r\n{line}\r\n"
         node.chatOutputTable[peer].add message
       else:
         break
@@ -1006,11 +1004,11 @@ proc serveThread() {.async.} =
           var foundInPeerBoard: bool
           for i in peerboard.allItems:
             var item = i.getText().strip()
-            if item.contains(line) or node.peerInfoTable.hasKey(line) and item.contains($node.peerInfoTable[line].info.domain):
+            if item.contains(line) or node.peerInfoTable.hasKey(line) and item.contains($node.peerInfoTable[line].peerInfo.domainName):
               scrollTo i
               select i
               foundInPeerBoard = true
-              node.consoleString = fanyi"in peerboard " & node.peerInfoTable[line].info.domain & "\r\n"
+              node.consoleString = fanyi"in peerboard " & node.peerInfoTable[line].peerInfo.domainName & "\r\n"
               console.add node.consoleString
               break
           if not foundInPeerBoard:
@@ -1042,7 +1040,7 @@ proc serveThread() {.async.} =
           if len(parts) == 3:
             var topic = parts[1]
             var message = parts[2]
-            await node.api.pubsubPublish(topic, message)
+            await node.api.pubsubPublish(topic, cast[seq[byte]](message))
         elif line.startsWith("/listpeers"):
           var parts = line.split(" ")
           if len(parts) == 2:
@@ -1182,11 +1180,9 @@ var waitThread: Thread[void]
 waitThread.createThread(wait)
 
 node.messageChan.send("/sub " & node.topDomain)
-node.messageChan.send("/sub 域名系统")
 
 frame.center()
 frame.show()
 app.mainLoop()
 
 waitThread.joinThread
-shellOpen.joinThread

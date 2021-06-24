@@ -139,8 +139,9 @@ template getPeerId(): untyped =
 proc callback(api: DaemonAPI,ticket: PubsubTicket,message: PubSubMessage): Future[bool] = 
   {.gcsafe.}:
     result = newFuture[bool]()
-    if message.data.contains("/"):
-      var file = message.data
+    var data = cast[string](message.data)
+    if data.contains("/"):
+      var file = data
       echo "\r\n" 
       if not fileTable.hasKey(file):
         var (path,name,ext) = splitFile(file)
@@ -175,7 +176,7 @@ proc status() {.async.} =
             if line == "" or line == "stop":
               break
 
-            var message = strformat.`&`"{peerInfoTable[peer].domain} {$now().format(timeFormat)}\r\n{line}\r\n"
+            var message = strformat.`&`"{peerInfoTable[peer].domainName} {$now().format(timeFormat)}\r\n{line}\r\n"
             echo message
               
           of SendProtocol:
@@ -247,7 +248,7 @@ proc status() {.async.} =
               data.remotes[peer][LikeProtocol] = stream
             else:
               data.remotes[peer] = {LikeProtocol: stream}.toOrderedTable
-            consoleString = $peerInfoTable[$stream.peer].domain & strformat.`&` "点赞了\r\n{line}\r\n"
+            consoleString = $peerInfoTable[$stream.peer].domainName & strformat.`&` "点赞了\r\n{line}\r\n"
             echo consoleString
           else:
             break
@@ -323,7 +324,7 @@ proc serveThread() {.async.} =
           if len(parts) == 3:
             var topic = parts[1]
             var message = parts[2]
-            await data.api.pubsubPublish(topic, message)
+            await data.api.pubsubPublish(topic, cast[seq[byte]](message))
         elif line.startsWith("/listpeers"):
           var parts = line.split(" ")
           if len(parts) == 2:
